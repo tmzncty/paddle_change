@@ -9,15 +9,64 @@
 
 --- 
 # 代码说明
-highocr3_f2.py 已经实现大文件夹下内有子文件夹的ocr并保留原始格式，且多进程外加上删除缓存图片，可以直接用。如图
+
+## highocr3_f2.py 
+已经实现大文件夹下内有子文件夹的ocr并保留原始格式，且多进程外加上删除缓存图片，可以直接用。
+
+## 效果如图
 ![image_2025-02-17_10-47-59](https://github.com/user-attachments/assets/691e7488-1114-49a1-baec-33eb63cf6a38)
 ![image_2025-02-16_13-46-51](https://github.com/user-attachments/assets/21216f63-1a57-4ef0-b463-6117d28fa29c)
 
-pdf_creator_with_text_layer5.py 已经实现按照图片前缀进行排序、往下移动文本框、美化输出、控制内存使用量。
-如图
+## pdf_creator_with_text_layer5.py 
+已经实现按照图片前缀进行排序、往下移动文本框、美化输出、控制内存使用量。
+
+## 效果如图
+
 ![image](https://github.com/user-attachments/assets/d1672777-9655-4d18-9e39-135d6786311b)
 ![image](https://github.com/user-attachments/assets/3c03ce4f-88f6-4779-b6eb-d66a06d49b18)
 
+但是，测试表明上面的可能还炸内存
+于是乎我改个下面的
+## pdf_creator_with_text_layer6.py
+
+**核心思路：分块处理（Chunking）**
+
+1.  **小 PDF 合成：** 我不是一次性把一个子目录下的所有图片（可能几百张）全部合成一个大的 PDF。 而是将它们分成小块，每块包含 `CHUNK_SIZE` 张图片（您在代码中设置为了 50 张）。 对于每一小块，我会：
+    *   创建一个新的 `fitz.Document` 对象（PyMuPDF 中用来表示 PDF 的对象）。
+    *   将这 50 张图片以及对应的 OCR 文本层添加到这个 `fitz.Document` 中。
+    *   将这个包含 50 页的文档保存为一个*临时*的小 PDF 文件（我把它们放在了 `output_base_dir` 下的 `intermediate` 子目录中）。
+    *   *关闭* 这个 `fitz.Document` 对象，并使用 `del doc` 和 `gc.collect()` 尽可能释放内存。
+
+2.  **大 PDF 合成：** 当一个子目录下的所有图片都被分成小块、处理成小 PDF 后，我会：
+    *   创建一个新的 `fitz.Document` 对象。
+    *   按顺序打开每一个小的、临时的 PDF 文件。
+    *   使用 `final_doc.insert_pdf(intermediate_doc)` 将小 PDF 的所有页面插入到最终的 PDF 文档中。
+    *   删除这个小的、临时的 PDF 文件（`os.remove(intermediate_path)`），释放磁盘空间。
+    *   最后，将包含所有页面的 `final_doc` 保存为最终的 PDF 文件。
+
+**为什么要这样做？（内存优化）**
+
+*   **限制峰值内存使用：** 这是最关键的原因。 如果不分块，PyMuPDF 需要在内存中同时保存*所有*的图像数据、OCR 数据和 PDF 页面结构。对于几百张高分辨率图片，这很容易耗尽内存。 分块后，任何时候，内存中最多只需要保存：
+    *   `CHUNK_SIZE` 张图片的数据（原始或增强后的）。
+    *   `CHUNK_SIZE` 个 JSON 文件的 OCR 数据。
+    *   一个包含 `CHUNK_SIZE` 页的 PyMuPDF 文档对象。
+
+    这比一次性加载所有内容所需的内存要少得多。
+
+*   **及时释放资源：** 每次处理完一个小块后，我们会立即关闭 `fitz.Document` 对象、删除不再需要的变量（`del`），并调用垃圾回收器（`gc.collect()`）。 这样做可以尽可能快地让 Python 释放不再使用的内存。 虽然 Python 的垃圾回收不是即时的，但这些操作有助于加快回收过程。
+
+*   **中间文件：** 使用中间的 PDF 文件（小 PDF）有两个好处：
+    *   **容错性：** 如果程序在处理过程中崩溃（例如，由于内存不足或其它错误），您至少还有一些已经完成的小 PDF。 您不需要从头开始重新处理所有内容。
+    *   **磁盘空间管理：** 处理完一个小 PDF 并将其合并到最终 PDF 后，就可以删除这个小 PDF，避免磁盘空间被大量临时文件占用。
+
+**总结**
+
+这种分块策略是一种经典的内存管理技术，尤其适用于处理大型数据集（例如图像、文本）的情况。 它通过将大任务分解成小任务，并及时清理中间结果，来避免内存溢出（Out-of-Memory, OOM）错误。 这也是为什么我强烈建议您将 `NUM_PROCESSES` 设置为一个较小的值（例如 4 或 8）的原因。 即使每个进程的内存使用量减少了，32 个进程仍然可能导致很高的总体内存需求。
+
+## 效果
+
+![image](https://github.com/user-attachments/assets/d11b289b-d5d5-4123-b8f7-67b75d5f83f1)
+![image](https://github.com/user-attachments/assets/ba387699-4688-44d6-a42a-c1cd175ed17f)
 
 
 # 详细介绍【可以参考，但是和上面的代码有差别】
